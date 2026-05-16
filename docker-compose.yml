@@ -1,0 +1,11 @@
+services:
+  vrising:
+    build: .
+    container_name: vrising_server
+    restart: unless-stopped
+    ports:
+      - "5555:80"           # Akses Web Panel (Host: 5555 -> Container: 80)
+      - "5580:5580/udp"     # Game Traffic
+      - "5581:5581/udp"     # Master Query List
+    volumes:
+      - .:/var/www/html     # Semua file (web + game) ada di sini
