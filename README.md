@@ -1,69 +1,72 @@
 # Romestead Server Panel
 
-Panel web sederhana untuk mengelola dedicated server **Romestead** di Linux menggunakan Docker, Apache/PHP, .NET 8 runtime, dan SteamCMD.
+A lightweight web panel for managing a **Romestead Dedicated Server** on Linux with Docker, Apache/PHP, the .NET 8 runtime, and SteamCMD.
 
-Fitur utama:
+## Features
 
-- Start, stop, restart server Romestead dari web panel
-- Install/update dedicated server via SteamCMD
-- Edit host settings dan server config dari browser
-- Backup dan restore save data
-- Backup otomatis harian dengan retensi 3 hari
-- Monitoring status dasar server
+- Start, stop, and restart the Romestead server from a web panel
+- Install or update the dedicated server through SteamCMD
+- Edit host settings and raw server config from the browser
+- Create, upload, restore, and delete save backups
+- Daily automatic backups with 3-day retention
+- Basic server status and resource monitoring
+- Capped log viewer to avoid browser freezes from large server logs
 
-## Kebutuhan
+## Requirements
 
-- Linux server
-- Docker dan Docker Compose
-- Port yang terbuka:
-  - `5555/tcp` untuk web panel
-  - `5580/tcp` dan `5580/udp` untuk game traffic
-- Disk kosong beberapa GB untuk dedicated server Romestead dan save data
+- Linux server or VPS
+- Docker and Docker Compose
+- Open ports:
+  - `5555/tcp` for the web panel
+  - `5580/tcp` and `5580/udp` for game traffic
+- Several GB of free disk space for the dedicated server files, saves, and backups
 
-## Cara Install
+## Installation
 
-Clone repository:
+Clone the repository:
 
 ```bash
 git clone https://github.com/ArfanZaky/romestead-server-panel.git
 cd romestead-server-panel
 ```
 
-Build dan jalankan container:
+Build and start the container:
 
 ```bash
 docker compose up -d --build
 ```
 
-Buka panel di browser:
+Open the panel in your browser:
 
 ```text
-http://IP-SERVER:5555
+http://YOUR-SERVER-IP:5555
 ```
 
-Lalu dari dashboard panel, klik tombol **Install / Update Server** untuk mengunduh dedicated server Romestead lewat SteamCMD.
+From the dashboard, click **Install / Update Server** to download the Romestead Dedicated Server through SteamCMD.
 
-Setelah instalasi selesai:
+After the installation finishes:
 
-1. Buka menu **Host Settings**
-2. Atur world name, password jika perlu, max players, dan port
-3. Buka menu **Server Config** jika ingin mengubah JSON konfigurasi tambahan
-4. Kembali ke dashboard
-5. Klik **Start Server**
+1. Open **Host Settings**.
+2. Set the world name, password if needed, max players, world size, seed, and game port.
+3. Open **Server Config** if you need to edit the raw `config.json`.
+4. Return to the dashboard.
+5. Click **Start Server**.
 
 ## Platform Support
 
-Panel ini ditujukan untuk **Linux server** lewat Docker. Host Windows tetap bisa dipakai untuk development atau menjalankan Docker Desktop, tetapi dedicated server Romestead di panel ini dijalankan di dalam container Linux dengan .NET runtime dan SteamCMD.
+This panel is designed for **Linux server deployment through Docker**.
 
-Ringkasnya:
+Supported usage:
 
-- Linux VPS/server: supported dan direkomendasikan
-- Windows + Docker Desktop/WSL2: bisa untuk development/testing
-- Windows native tanpa Docker: belum didukung oleh panel ini
+- Linux VPS/server: supported and recommended
+- Windows with Docker Desktop/WSL2: usable for development and testing
+- Native Windows without Docker: not supported by this panel
 
-## Port Default
+The Romestead dedicated server files are not included in this repository. They are downloaded at runtime through SteamCMD.
 
-Konfigurasi default di `docker-compose.yml`:
+## Default Ports
+
+Default `docker-compose.yml` port mapping:
 
 ```yaml
 ports:
@@ -72,76 +75,86 @@ ports:
   - "5580:5580/udp" # Game traffic
 ```
 
-Jika port game diubah dari panel, sesuaikan juga mapping port di `docker-compose.yml` lalu restart container:
+If you change the game port from the panel, update the Docker port mapping too, then restart the container:
 
 ```bash
 docker compose down
 docker compose up -d
 ```
 
-## Struktur Folder
+## Directory Layout
 
 ```text
 .
-├── api.php              # Backend action panel
+├── api.php              # Panel backend actions
 ├── index.php            # Dashboard
 ├── settings.php         # Host settings editor
-├── game_settings.php    # Server config editor
-├── config.php           # Path dan helper konfigurasi
-├── Dockerfile           # Image PHP + .NET runtime + SteamCMD
-├── docker-compose.yml   # Service Docker
-├── assets/              # CSS/assets panel
-└── engine/              # Runtime data, dibuat/diisi saat berjalan
-    ├── server/          # File dedicated server dari SteamCMD
-    │   └── saved_worlds/ # Save world Romestead
-    ├── savedata/        # Folder kompatibilitas/legacy panel
-    └── backups/         # Backup save data
+├── game_settings.php    # Raw server config editor
+├── config.php           # Paths and helper functions
+├── Dockerfile           # PHP + .NET runtime + SteamCMD image
+├── docker-compose.yml   # Docker service definition
+├── docker-entrypoint.sh # Starts cron and Apache
+├── scripts/             # Scheduled maintenance scripts
+├── assets/              # CSS/assets
+└── engine/              # Runtime data, created while running
+    ├── server/          # Dedicated server files from SteamCMD
+    │   └── saved_worlds/ # Romestead world saves
+    ├── savedata/        # Legacy/compatibility runtime directory
+    └── backups/         # Save backups
 ```
 
-Catatan: folder `engine/server`, `engine/savedata`, dan `engine/backups` tidak disimpan di Git karena ukurannya besar dan berisi data runtime. Folder tersebut akan dibuat otomatis oleh container/panel.
+Runtime folders such as `engine/server`, `engine/savedata`, `engine/backups`, and `engine/Steam` are ignored by Git because they contain generated data, saves, backups, and large SteamCMD files.
 
-## Backup dan Restore
+## Backups and Restore
 
-Backup manual dapat dibuat dari dashboard panel. Backup otomatis berjalan setiap hari pukul `03:00 UTC`, memakai nama `daily_backup_YYYY-MM-DD_HHMMSS.tar.gz`, dan otomatis menghapus daily backup yang lebih tua dari 3 hari.
+Manual backups can be created from the dashboard.
 
-File backup tersimpan di:
+Automatic backups run every day at `03:00 UTC`, use the filename format `daily_backup_YYYY-MM-DD_HHMMSS.tar.gz`, and automatically delete daily backups older than 3 days.
+
+Backups are stored in:
 
 ```text
 engine/backups/
 ```
 
-Untuk restore, gunakan fitur restore/upload di panel. Disarankan stop server sebelum restore save data agar file tidak berubah saat proses berlangsung.
+For restore operations, use the restore or upload flow in the panel. Stop the server before restoring save data so files do not change during extraction.
 
-## Update Dedicated Server
+## Updating the Dedicated Server
 
-Gunakan tombol **Install / Update Server** di dashboard. Panel akan menjalankan SteamCMD untuk app dedicated server Romestead dan menampilkan log proses instalasi.
+Use **Install / Update Server** from the dashboard. The panel runs SteamCMD for the Romestead Dedicated Server App ID and shows the installation log.
 
 ## Troubleshooting
 
-Jika server gagal start:
+If the server does not start:
 
-- Pastikan instalasi dedicated server sudah selesai dan `Server.dll` ada di `engine/server/`
-- Pastikan port TCP/UDP sudah dibuka di firewall/provider VPS
-- Cek log container:
+- Make sure the dedicated server installation finished and `Server.dll` exists in `engine/server/`.
+- Make sure the TCP/UDP game ports are open in your firewall or VPS provider panel.
+- Check the container logs:
 
 ```bash
 docker compose logs -f
 ```
 
-- Cek log runtime server di dalam container:
+- Check the runtime server log inside the container:
 
 ```bash
 docker exec -it romestead_server bash
 cat /tmp/romestead_server.log
 ```
 
-Jika panel tidak bisa diakses:
+If the panel is not reachable:
 
 ```bash
 docker compose ps
 docker compose logs -f romestead
 ```
 
-## Catatan Keamanan
+## Security Notes
 
-Panel ini sebaiknya tidak langsung dibuka publik tanpa proteksi tambahan. Jika digunakan di internet, pasang reverse proxy dengan autentikasi, VPN, atau firewall allowlist IP.
+This panel does not include authentication. Do not expose it directly to the public internet without extra protection.
+
+Recommended options:
+
+- Put it behind a reverse proxy with authentication.
+- Use a VPN.
+- Restrict access by firewall or IP allowlist.
