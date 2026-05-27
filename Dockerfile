@@ -1,23 +1,21 @@
 FROM php:8.2-apache
 
-# Bypass persetujuan instalasi SteamCMD
-RUN echo steam steam/question select "I AGREE" | debconf-set-selections \
-    && echo steam steam/license note '' | debconf-set-selections
-
-# Aktifkan 32-bit, install semua dependencies dalam 1 layer untuk hemat disk
-# Termasuk: wine, xvfb, xauth, lib32gcc, steamcmd dependencies
+# Aktifkan 32-bit untuk SteamCMD, plus .NET 8 runtime dependencies untuk Romestead.
 RUN dpkg --add-architecture i386 \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-       wine wine64 wine32 xvfb xauth wget curl procps ca-certificates lib32gcc-s1 \
+       bash wget curl procps ca-certificates cron lib32gcc-s1 libicu76 \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc /usr/share/man /usr/share/locale \
     && apt-get clean
 
-# Buat symlink wine jika belum ada (beberapa distro hanya punya wine64)
-RUN if [ ! -f /usr/bin/wine ] && [ -f /usr/bin/wine64 ]; then \
-        ln -s /usr/bin/wine64 /usr/bin/wine; \
-    fi
+# Install .NET runtime yang dibutuhkan Server.dll.
+RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+    && bash /tmp/dotnet-install.sh --runtime dotnet --version 8.0.22 --install-dir /opt/dotnet \
+    && rm /tmp/dotnet-install.sh
+
+ENV DOTNET_ROOT=/opt/dotnet
+ENV PATH="${PATH}:/opt/dotnet"
 
 # Install SteamCMD secara manual (lebih reliable daripada apt)
 RUN mkdir -p /usr/games \
@@ -35,6 +33,8 @@ RUN chown -R www-data:www-data /usr/games
 RUN mkdir -p /var/www/html/engine/server \
     && mkdir -p /var/www/html/engine/savedata/Settings \
     && mkdir -p /var/www/html/engine/backups \
+    && mkdir -p /GameAnalytics \
+    && chmod -R 0777 /GameAnalytics \
     && chown -R www-data:www-data /var/www/html/engine
 
 # Jalankan SteamCMD sekali saat build agar dia update dirinya sendiri
@@ -49,3 +49,12 @@ RUN echo "upload_max_filesize = 512M" > /usr/local/etc/php/conf.d/uploads.ini \
 
 # Pasang permission agar user web server setara dengan user utama server
 RUN usermod -u 1000 www-data
+
+# Backup harian jam 03:00 UTC, dengan retensi otomatis 3 hari untuk daily backup.
+RUN printf '0 3 * * * www-data bash /var/www/html/scripts/daily-backup.sh >> /tmp/romestead_daily_backup.log 2>&1\n' > /etc/cron.d/romestead-daily-backup \
+    && chmod 0644 /etc/cron.d/romestead-daily-backup
+
+COPY docker-entrypoint.sh /usr/local/bin/romestead-entrypoint
+RUN chmod +x /usr/local/bin/romestead-entrypoint
+
+CMD ["romestead-entrypoint"]

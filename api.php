@@ -20,10 +20,9 @@ if ($action === 'status') {
     $cpuLoad = 0;
 
     if ($isRunning) {
-        // Get RAM of all Wine/VRising processes (RSS memory in KB via ps)
-        // Di Linux, VRisingServer.exe berjalan lewat Wine, jadi kita hitung total RAM semua proses terkait
+        // Get RAM of the Romestead .NET process (RSS memory in KB via ps)
         $psOut = [];
-        exec("ps -eo rss,command | grep -E '[V]RisingServer|[w]ine-preloader|[w]ineserver' | awk '{sum+=\$1} END {print sum}'", $psOut);
+        exec("ps -eo rss,command | grep -E '[d]otnet .*Server\\.dll' | awk '{sum+=\$1} END {print sum}'", $psOut);
         if (!empty($psOut) && is_numeric(trim($psOut[0]))) {
             $ramMB = round((int) trim($psOut[0]) / 1024);
         }
@@ -51,51 +50,33 @@ if ($action === 'start') {
         exit;
     }
 
-    if (!file_exists(SERVER_EXE)) {
-        echo json_encode(['success' => false, 'message' => 'VRisingServer.exe not found! Is the installation complete?']);
+    if (!file_exists(SERVER_DLL)) {
+        echo json_encode(['success' => false, 'message' => 'Server.dll not found! Is the installation complete?']);
         exit;
     }
 
-    $exe = SERVER_EXE;
-    $saveDir = SAVE_DIR;
     $logFile = LOG_FILE;
-    $engineDir = dirname($logFile);
+    $config = readRomesteadConfig();
+    $config['AutoCreateAndLoadWorld'] = true;
+    if (empty($config['AutoStartWorldName'])) {
+        $config['AutoStartWorldName'] = 'romestead_server';
+    }
+    if ($config['Password'] === null) {
+        $config['Password'] = '';
+    }
+    writeRomesteadConfig($config);
 
-    // WINE ENVIRONMENT CHECK
-    $hasWine = file_exists('/usr/bin/wine') || file_exists('/usr/bin/wine64');
-    $hasXvfb = file_exists('/usr/bin/xvfb-run');
-    if (!$hasWine || !$hasXvfb) {
-        echo json_encode(['success' => false, 'message' => "Missing dependencies! Make sure 'wine' and 'xvfb' are installed on Linux."]);
+    if (!file_exists(DOTNET_BIN)) {
+        echo json_encode(['success' => false, 'message' => ".NET runtime not found at " . DOTNET_BIN]);
         exit;
     }
 
-    // WINE ENVIRONMENT CHECK
-    // Wine menolak /tmp karena bukan milik www-data. Jadi kita buat folder khusus di /tmp yang dimiliki oleh web server.
-    $tmpWineDir = '/tmp/wine_' . exec('whoami');
-    if (!file_exists($tmpWineDir)) {
-        @mkdir($tmpWineDir, 0777, true);
-    }
-    $winePrefix = "export HOME={$tmpWineDir} && export WINEPREFIX={$tmpWineDir}/.wine && ";
-
-
-    // Read bind address if any
-    $bindAddress = ' -address 0.0.0.0';
-    $hostSettingsFile = SETTINGS_DIR . '/ServerHostSettings.json';
-    if (file_exists($hostSettingsFile)) {
-        $settingsData = json_decode(file_get_contents($hostSettingsFile), true);
-        if (!empty($settingsData['BindAddress'])) {
-            $bindAddress = ' -address ' . trim($settingsData['BindAddress']);
-        }
-    }
-
-    // Linux Wine Launcher - output captured to log file
+    // Native .NET launcher - output captured to log file
     $logFile = LOG_FILE;
     @file_put_contents($logFile, '[' . date('Y-m-d H:i:s') . "] === SERVER STARTING ===\n");
 
-    // CD to server dir + Set WINEPREFIX + Force Unity to log to stdout and skip graphics
-    $serverDir = escapeshellarg(dirname($exe));
-    $cmdExe = escapeshellarg(basename($exe));
-    $command = $winePrefix . 'cd ' . $serverDir . ' && nohup xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" env WINEDEBUG=-all wine ' . $cmdExe . ' -batchmode -nographics -persistentDataPath ' . escapeshellarg($saveDir) . ' -logfile - >> ' . escapeshellarg($logFile) . ' 2>&1 &';
+    $serverDir = escapeshellarg(SERVER_DIR);
+    $command = 'cd ' . $serverDir . ' && nohup bash -lc ' . escapeshellarg('(printf "\n"; tail -f /dev/null) | env HOME=' . SERVER_DIR . ' DOTNET_CLI_HOME=' . SERVER_DIR . ' ' . DOTNET_BIN . ' Server.dll') . ' >> ' . escapeshellarg($logFile) . ' 2>&1 &';
 
     exec($command);
 
@@ -112,7 +93,7 @@ if ($action === 'stop') {
         exit;
     }
 
-    killVRisingServer();
+    killRomesteadServer();
 
     echo json_encode(['success' => true, 'message' => 'Server stopped.']);
     exit;
@@ -125,7 +106,7 @@ if ($action === 'restart') {
     }
 
     // Step 1: Kill the server completely
-    killVRisingServer();
+    killRomesteadServer();
 
     // Step 2: Verify it's dead
     $maxWait = 10;
@@ -141,38 +122,17 @@ if ($action === 'restart') {
     }
 
     // Step 3: Start the server again
-    if (!file_exists(SERVER_EXE)) {
-        echo json_encode(['success' => false, 'message' => 'Server stopped, but VRisingServer.exe not found for restart!']);
+    if (!file_exists(SERVER_DLL)) {
+        echo json_encode(['success' => false, 'message' => 'Server stopped, but Server.dll not found for restart!']);
         exit;
     }
 
-    $exe = SERVER_EXE;
-    $saveDir = SAVE_DIR;
-
-    // Read bind address if any
-    $bindAddress = ' -address 0.0.0.0';
-    $hostSettingsFile = SETTINGS_DIR . '/ServerHostSettings.json';
-    if (file_exists($hostSettingsFile)) {
-        $settingsData = json_decode(file_get_contents($hostSettingsFile), true);
-        if (!empty($settingsData['BindAddress'])) {
-            $bindAddress = ' -address ' . trim($settingsData['BindAddress']);
-        }
-    }
-
-    // Linux Wine Launcher - output captured to log file
+    // Native .NET launcher - output captured to log file
     $logFile = LOG_FILE;
     @file_put_contents($logFile, '[' . date('Y-m-d H:i:s') . "] === SERVER RESTARTING ===\n");
 
-    // WINE ENVIRONMENT CHECK
-    $tmpWineDir = '/tmp/wine_' . exec('whoami');
-    if (!file_exists($tmpWineDir)) {
-        @mkdir($tmpWineDir, 0777, true);
-    }
-    $winePrefix = "export HOME={$tmpWineDir} && export WINEPREFIX={$tmpWineDir}/.wine && ";
-
-    $serverDir = escapeshellarg(dirname($exe));
-    $cmdExe = escapeshellarg(basename($exe));
-    $command = $winePrefix . 'cd ' . $serverDir . ' && nohup xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" env WINEDEBUG=-all wine ' . $cmdExe . ' -batchmode -nographics -persistentDataPath ' . escapeshellarg($saveDir) . ' -logfile - >> ' . escapeshellarg($logFile) . ' 2>&1 &';
+    $serverDir = escapeshellarg(SERVER_DIR);
+    $command = 'cd ' . $serverDir . ' && nohup bash -lc ' . escapeshellarg('(printf "\n"; tail -f /dev/null) | env HOME=' . SERVER_DIR . ' DOTNET_CLI_HOME=' . SERVER_DIR . ' ' . DOTNET_BIN . ' Server.dll') . ' >> ' . escapeshellarg($logFile) . ' 2>&1 &';
 
     exec($command);
     sleep(3);
@@ -188,41 +148,20 @@ if ($action === 'restart') {
 // ==================== BACKUP & RESTORE ====================
 
 if ($action === 'backup') {
-    $saveDir = SAVE_DIR;
-    $backupDir = BACKUP_DIR;
+    echo json_encode(createSaveBackup('backup_'));
+    exit;
+}
 
-    // Check if savedata directory has content
-    if (!is_dir($saveDir) || count(scandir($saveDir)) <= 2) {
-        echo json_encode(['success' => false, 'message' => 'No save data found to backup.']);
-        exit;
-    }
-
-    // Generate filename with timestamp
-    $timestamp = date('Y-m-d_His');
-    $backupFile = $backupDir . '/backup_' . $timestamp . '.tar.gz';
-
-    // Create tar.gz backup of the entire savedata directory
-    $command = 'tar -czf ' . escapeshellarg($backupFile) . ' -C ' . escapeshellarg(dirname($saveDir)) . ' ' . escapeshellarg(basename($saveDir)) . ' 2>&1';
-    $output = [];
-    $returnCode = 0;
-    exec($command, $output, $returnCode);
-
-    // tar exit code 0 = success, 1 = warning (file changed during read, normal saat server running)
-    // Hanya exit code >= 2 yang dianggap fatal error
-    if ($returnCode <= 1 && file_exists($backupFile)) {
-        $sizeMB = round(filesize($backupFile) / 1024 / 1024, 2);
-        $warning = ($returnCode === 1) ? ' (some files changed during backup - this is normal while server is running)' : '';
-        echo json_encode([
-            'success' => true,
-            'message' => "Backup created: backup_{$timestamp}.tar.gz ({$sizeMB} MB)" . $warning
-        ]);
-    } else {
-        echo json_encode(['success' => false, 'message' => 'Backup failed: ' . implode(' ', $output)]);
-    }
+if ($action === 'daily_backup') {
+    $result = createSaveBackup(AUTO_BACKUP_PREFIX);
+    $result['deleted_old_backups'] = pruneOldAutomaticBackups(AUTO_BACKUP_RETENTION_DAYS);
+    echo json_encode($result);
     exit;
 }
 
 if ($action === 'list_backups') {
+    pruneOldAutomaticBackups(AUTO_BACKUP_RETENTION_DAYS);
+
     $backupDir = BACKUP_DIR;
     $backups = [];
 
@@ -270,9 +209,17 @@ if ($action === 'restore') {
         exit;
     }
 
-    $saveDir = SAVE_DIR;
-    $parentDir = dirname($saveDir);
-    $saveDirName = basename($saveDir);
+    $peekOutput = [];
+    exec('tar -tzf ' . escapeshellarg($backupFile) . ' | head -1', $peekOutput);
+    $firstEntry = $peekOutput[0] ?? '';
+
+    if (strpos($firstEntry, 'saved_worlds/') === 0) {
+        $saveDir = WORLD_SAVE_DIR;
+        $parentDir = SERVER_DIR;
+    } else {
+        $saveDir = SAVE_DIR;
+        $parentDir = dirname($saveDir);
+    }
 
     // Step 1: Remove current savedata
     exec('rm -rf ' . escapeshellarg($saveDir) . ' 2>&1', $rmOutput, $rmCode);
@@ -457,110 +404,55 @@ if ($action === 'delete_backup') {
     exit;
 }
 
-// Debug: lihat semua file settings dan isi password-nya
-if ($action === 'debug_settings') {
-    $results = [];
-
-    // Scan semua ServerHostSettings.json di seluruh engine/savedata
-    $baseDir = SAVE_DIR;
-    if (is_dir($baseDir)) {
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($baseDir, RecursiveDirectoryIterator::SKIP_DOTS)
-        );
-        foreach ($iterator as $file) {
-            if ($file->getFilename() === 'ServerHostSettings.json') {
-                $path = $file->getPathname();
-                $data = json_decode(file_get_contents($path), true);
-                $results[] = [
-                    'path' => $path,
-                    'has_password_key' => array_key_exists('Password', $data ?? []),
-                    'password_value' => $data['Password'] ?? '(KEY NOT EXISTS)',
-                    'name' => $data['Name'] ?? '(no name)',
-                ];
-            }
-        }
-    }
-
-    // Juga cek default settings di server installation
-    $defaultFile = SERVER_DIR . '/VRisingServer_Data/StreamingAssets/Settings/ServerHostSettings.json';
-    if (file_exists($defaultFile)) {
-        $data = json_decode(file_get_contents($defaultFile), true);
-        $results[] = [
-            'path' => $defaultFile . ' [DEFAULT/TEMPLATE]',
-            'has_password_key' => array_key_exists('Password', $data ?? []),
-            'password_value' => $data['Password'] ?? '(KEY NOT EXISTS)',
-            'name' => $data['Name'] ?? '(no name)',
-        ];
-    }
-
-    echo json_encode(['success' => true, 'files_found' => count($results), 'settings' => $results], JSON_PRETTY_PRINT);
-    exit;
-}
-
-// Force hapus password dari SEMUA file ServerHostSettings.json
-if ($action === 'force_remove_password') {
-    $count = 0;
-    $baseDir = SAVE_DIR;
-
-    if (is_dir($baseDir)) {
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($baseDir, RecursiveDirectoryIterator::SKIP_DOTS)
-        );
-        foreach ($iterator as $file) {
-            if ($file->getFilename() === 'ServerHostSettings.json') {
-                $path = $file->getPathname();
-                $data = json_decode(file_get_contents($path), true);
-                if ($data && array_key_exists('Password', $data)) {
-                    unset($data['Password']);
-                    file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT));
-                    $count++;
-                }
-            }
-        }
-    }
-
-    // Juga bersihkan dari default/template
-    $defaultFile = SERVER_DIR . '/VRisingServer_Data/StreamingAssets/Settings/ServerHostSettings.json';
-    if (file_exists($defaultFile)) {
-        $data = json_decode(file_get_contents($defaultFile), true);
-        if ($data && array_key_exists('Password', $data)) {
-            unset($data['Password']);
-            file_put_contents($defaultFile, json_encode($data, JSON_PRETTY_PRINT));
-            $count++;
-        }
-    }
-
-    echo json_encode(['success' => true, 'message' => "Password removed from {$count} settings file(s). Restart the server now."]);
-    exit;
-}
-
 // ==================== LOG VIEWER ====================
 
 if ($action === 'log') {
     $logFile = LOG_FILE;
     $lines = isset($_GET['lines']) ? (int) $_GET['lines'] : 100;
     $lines = max(10, min($lines, 500)); // clamp between 10 and 500
+    $maxBytes = 200 * 1024;
 
     if (!file_exists($logFile)) {
-        echo json_encode(['success' => true, 'log' => '(No log file yet. Start the server to generate logs.)', 'lines' => 0]);
+        echo json_encode([
+            'success' => true,
+            'log' => '(No log file yet. Start the server to generate logs.)',
+            'lines' => 0,
+            'file_size_mb' => 0,
+            'truncated' => false
+        ]);
         exit;
     }
 
-    // Read last N lines efficiently using tail
-    $output = [];
-    exec('tail -n ' . $lines . ' ' . escapeshellarg($logFile), $output);
-
-    $logContent = implode("\n", $output);
-
-    // Also get file size info
     $fileSize = filesize($logFile);
     $fileSizeMB = round($fileSize / 1024 / 1024, 2);
+    $truncated = $fileSize > $maxBytes;
+
+    // Romestead world generation can write progress updates as one huge line.
+    // Limit by bytes first so the browser never receives multi-MB log payloads.
+    $output = [];
+    exec('tail -c ' . $maxBytes . ' ' . escapeshellarg($logFile), $output);
+    $logContent = implode("\n", $output);
+    $logContent = str_replace("\r", "\n", $logContent);
+    $logContent = preg_replace("/[ \t]{20,}/", "\n", $logContent);
+
+    $logLines = array_values(array_filter(
+        preg_split("/\n/", $logContent),
+        static function ($line) {
+            return trim($line) !== '';
+        }
+    ));
+    if (count($logLines) > $lines) {
+        $logLines = array_slice($logLines, -$lines);
+    }
+    $logContent = implode("\n", $logLines);
 
     echo json_encode([
         'success' => true,
         'log' => $logContent,
-        'lines' => count($output),
-        'file_size_mb' => $fileSizeMB
+        'lines' => count($logLines),
+        'file_size_mb' => $fileSizeMB,
+        'truncated' => $truncated,
+        'max_payload_kb' => round($maxBytes / 1024)
     ]);
     exit;
 }
@@ -601,11 +493,11 @@ if ($action === 'install_server') {
     $scriptContent .= "@NoPromptForPassword 1\n";
     $scriptContent .= "@sSteamCmdForcePlatformType windows\n";
     $scriptContent .= "@sSteamCmdForcePlatformBitness 64\n";
-    $scriptContent .= "login anonymous\n";
     $scriptContent .= "force_install_dir " . $serverDir . "\n";
+    $scriptContent .= "login anonymous\n";
     $scriptContent .= "app_info_update 1\n";
-    $scriptContent .= "app_update 1829350 validate\n";
-    $scriptContent .= "app_update 1829350 validate\n";
+    $scriptContent .= "app_update 4763510 validate\n";
+    $scriptContent .= "app_update 4763510 validate\n";
     $scriptContent .= "quit\n";
     file_put_contents($scriptFile, $scriptContent);
     
@@ -633,10 +525,10 @@ if ($action === 'install_status') {
     
     // Check if finished via log or process
     $fullLog = file_get_contents($logFile);
-    if (strpos($fullLog, "Success! App '1829350' fully installed.") !== false || strpos($fullLog, "Error!") !== false) {
+    if (strpos($fullLog, "Success! App '4763510' fully installed.") !== false || strpos($fullLog, "Error!") !== false) {
         $installing = false;
     } else {
-        $pid = exec("pgrep -f 'app_update 1829350'");
+        $pid = exec("pgrep -f 'app_update 4763510'");
         if (empty($pid) && filemtime($logFile) < (time() - 10)) {
             $installing = false; // Process died and 10 seconds passed
         }

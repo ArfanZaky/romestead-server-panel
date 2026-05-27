@@ -2,27 +2,15 @@
 // index.php
 require 'config.php';
 
-$hostSettingsFile = SETTINGS_DIR . '/ServerHostSettings.json';
-$defaultHostSettings = SERVER_DIR . '/VRisingServer_Data/StreamingAssets/Settings/ServerHostSettings.json';
-
-// Try to read port from user settings or fallback to default
-$currentPort = 9876;
-$currentQueryPort = 9877;
-$settingsPathToRead = file_exists($hostSettingsFile) ? $hostSettingsFile : (file_exists($defaultHostSettings) ? $defaultHostSettings : null);
-
-if ($settingsPathToRead) {
-    $dataContent = @file_get_contents($settingsPathToRead);
-    $data = $dataContent !== false ? json_decode($dataContent, true) : [];
-    if (isset($data['Port'])) $currentPort = $data['Port'];
-    if (isset($data['QueryPort'])) $currentQueryPort = $data['QueryPort'];
-}
+$data = readRomesteadConfig();
+$currentPort = $data['Port'] ?? 5580;
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>V Rising Server Manager</title>
+    <title>Romestead Server Manager</title>
     <link rel="stylesheet" href="assets/style.css">
     <!-- FontAwesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -30,11 +18,11 @@ if ($settingsPathToRead) {
 <body>
 
     <nav class="navbar">
-        <h1><i class="fa-solid fa-moon"></i> V Rising <span>Panel</span></h1>
+        <h1><i class="fa-solid fa-server"></i> Romestead <span>Panel</span></h1>
         <div class="nav-links">
             <a href="index.php" class="active">Dashboard</a>
             <a href="settings.php">Host Settings</a>
-            <a href="game_settings.php">Game Rules</a>
+            <a href="game_settings.php">Server Config</a>
         </div>
     </nav>
 
@@ -73,12 +61,8 @@ if ($settingsPathToRead) {
                         <span class="value"><?php echo $currentPort; ?></span>
                     </li>
                     <li>
-                        <span class="label">Query Port</span>
-                        <span class="value"><?php echo $currentQueryPort; ?></span>
-                    </li>
-                    <li>
                         <span class="label">Save Name</span>
-                        <span class="value" style="font-weight:bold; color: #f0c36d;"><?php echo isset($data['SaveName']) ? htmlspecialchars($data['SaveName']) : 'world1'; ?></span>
+                        <span class="value" style="font-weight:bold; color: #f0c36d;"><?php echo htmlspecialchars($data['AutoStartWorldName'] ?? 'romestead_server'); ?></span>
                     </li>
                     <li>
                         <span class="label">Installation Path</span>
@@ -91,7 +75,7 @@ if ($settingsPathToRead) {
                     </li>
                     <li>
                         <span class="label">Save Data Path</span>
-                        <span class="value" style="font-size: 0.8rem;"><?php echo SAVE_DIR; ?></span>
+                        <span class="value" style="font-size: 0.8rem;"><?php echo WORLD_SAVE_DIR; ?></span>
                     </li>
                 </ul>
             </div>
@@ -139,6 +123,9 @@ if ($settingsPathToRead) {
             </div>
             
             <p id="backupMessage" style="margin-bottom: 1rem; font-size: 0.9rem; color: var(--text-muted); min-height: 1.2rem;"></p>
+            <p style="margin-bottom: 1rem; font-size: 0.82rem; color: var(--text-muted);">
+                Auto backup runs daily at 03:00 UTC and keeps the last 3 days of daily backups.
+            </p>
 
             <div id="backupListContainer">
                 <div class="backup-empty" id="backupEmpty">
@@ -253,9 +240,9 @@ if ($settingsPathToRead) {
     <!-- Script that handles install status checks -->
     <div id="installModal" class="modal-overlay" style="display:none;">
         <div class="glass-panel modal-box" style="max-width: 800px;">
-            <h3 style="margin-bottom: 1rem; color: #f0c36d;"><i class="fa-solid fa-cloud-arrow-down"></i> Installation Progress</h3>
+                <h3 style="margin-bottom: 1rem; color: #f0c36d;"><i class="fa-solid fa-cloud-arrow-down"></i> Installation Progress</h3>
             <p style="margin-bottom: 1rem; font-size: 0.9rem; color: var(--text-muted);">
-                Downloading V Rising Dedicated Server via SteamCMD (App ID 1829350).<br>
+                Downloading Romestead Dedicated Server via SteamCMD (App ID <?php echo APP_STEAM_ID; ?>).<br>
                 This process can take 10-30 minutes depending on your server's internet speed.
             </p>
             <div id="installLogConsole" class="log-console" style="margin-bottom: 1.5rem; height: 300px; font-size: 0.7rem; background: rgba(0,0,0,0.5);">
@@ -310,7 +297,7 @@ if ($settingsPathToRead) {
                 })
                 .catch(err => console.error(err));
         }
-        
+
         let installStatusTimer = null;
 
         function closeInstallModal() {
@@ -359,6 +346,13 @@ if ($settingsPathToRead) {
         }
 
         function toggleServer(action) {
+            if (action === 'restart' && !confirm('Restart Romestead server now? Connected players will be disconnected.')) {
+                return;
+            }
+            if (action === 'stop' && !confirm('Stop Romestead server now? Connected players will be disconnected.')) {
+                return;
+            }
+
             const btnMap = { start: 'btnStart', stop: 'btnStop', restart: 'btnRestart' };
             const loaderMap = { start: 'loaderStart', stop: 'loaderStop', restart: 'loaderRestart' };
             const msgMap = { start: 'Starting server...', stop: 'Stopping server...', restart: 'Restarting server... This may take a moment.' };
@@ -677,7 +671,7 @@ if ($settingsPathToRead) {
                         html = html.replace(/(\[\d{4}-\d{2}-\d{2}[^\]]*\])/g, '<span class="log-timestamp">$1</span>');
                         
                         logEl.innerHTML = html;
-                        infoEl.innerText = data.lines + ' lines | ' + data.file_size_mb + ' MB';
+                        infoEl.innerText = data.lines + ' lines | ' + data.file_size_mb + ' MB' + (data.truncated ? ' | capped' : '');
                         
                         // Auto-scroll to bottom
                         if (logAutoScroll) {
@@ -730,13 +724,13 @@ if ($settingsPathToRead) {
         // Check initially and then every 5 seconds
         checkStatus();
         setInterval(checkStatus, 5000);
-
+        
         // Load backups on page load
         loadBackupList();
 
         // Load log initially and refresh every 3 seconds
         loadLog();
-        logInterval = setInterval(loadLog, 3000);
+        logInterval = setInterval(loadLog, 5000);
     </script>
 </body>
 </html>
